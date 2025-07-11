@@ -86,7 +86,7 @@ export default function Navbar() {
               to="/login"
               className="px-4 py-2 text-sm font-medium rounded-md text-white bg-[#D95F3B] hover:bg-[#C04F2F] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#D95F3B]"
             >
-              <T text="auth.signIn" />
+              <T text="signIn" />
             </Link>
             <div className="relative ml-3" ref={langMenuRef}>
               <button
@@ -103,13 +103,13 @@ export default function Navbar() {
                     onClick={() => handleLanguageChange('en')}
                     className={`w-full text-left px-4 py-2 text-sm ${currentLanguage === 'en' ? 'text-[#D95F3B] font-medium' : 'text-black hover:text-[#D95F3B]'}`}
                   >
-                    <T text="language.english" />
+                    <T text="English" />
                   </button>
                   <button
                     onClick={() => handleLanguageChange('fr')}
                     className={`w-full text-left px-4 py-2 text-sm ${currentLanguage === 'fr' ? 'text-[#D95F3B] font-medium' : 'text-black hover:text-[#D95F3B]'}`}
                   >
-                    <T text="language.french" />
+                    <T text="French" />
                   </button>
                 </div>
               )}
@@ -153,11 +153,11 @@ export default function Navbar() {
               className="block w-full text-center mt-4 px-4 py-2 text-sm font-medium rounded-md text-white bg-[#D95F3B] hover:bg-[#C04F2F]"
               onClick={() => setIsOpen(false)}
             >
-              <T text="auth.signIn" />
+              <T text="signIn" />
             </Link>
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-midnight-600">
               <p className="px-3 text-sm font-medium text-black dark:text-gray-400">
-                <T text="language.select" />
+                <T text="Select Language" />
               </p>
               <div className="flex space-x-2">
                 <button
@@ -167,7 +167,7 @@ export default function Navbar() {
                   }}
                   className={`flex-1 py-2 px-3 text-sm rounded-md ${currentLanguage === 'en' ? 'text-[#D95F3B] font-medium border border-[#D95F3B]' : 'border border-gray-200 text-black hover:text-[#D95F3B] hover:border-[#D95F3B]'}`}
                 >
-                  <T text="language.english" />
+                  <T text="English" />
                 </button>
                 <button
                   onClick={() => {
@@ -176,7 +176,7 @@ export default function Navbar() {
                   }}
                   className={`flex-1 py-2 px-3 text-sm rounded-md ${currentLanguage === 'fr' ? 'text-[#D95F3B] font-medium border border-[#D95F3B]' : 'border border-gray-200 text-black hover:text-[#D95F3B] hover:border-[#D95F3B]'}`}
                 >
-                  <T text="language.french" />
+                  <T text="French" />
                 </button>
               </div>
             </div>

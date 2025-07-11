@@ -134,38 +134,57 @@ export default function Home() {
       </section>
 
       {/* Features Section */}
-      <section className="py-20 bg-white">
-        <div className="container mx-auto px-4">
-          <h2 className="text-4xl font-bold text-center mb-16 text-gray-900">
-            Why Choose Us?
-          </h2>
-          {/* Stagger wrapper for feature cards */}
-          <motion.div 
-            className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-8"
-            variants={{ visible: { transition: { staggerChildren: 0.1 } } }}
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, amount: 0.1 }}
+      
+<section className="py-20 bg-white">
+  <div className="container mx-auto px-6 sm:px-4 md:px-8">
+    <h2 className="text-4xl font-bold text-center mb-16 text-gray-900">
+      Why Choose Us?
+    </h2>
+
+    {/* Stagger wrapper for feature cards */}
+    <motion.div
+      className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-8"
+      initial="hidden"
+      whileInView="visible"
+      viewport={{ once: true, amount: 0.1 }}
+      variants={{
+        visible: {
+          transition: {
+            staggerChildren: 0.2 // delay each card by 0.2s
+          }
+        }
+      }}
+    >
+      {featuresData.map((feature, index) => (
+        <motion.div
+          key={index}
+          variants={fadeInSlideUp}
+          className="group bg-white p-6 rounded-2xl flex flex-col items-center text-center hover:bg-gradient-to-r hover:from-orange-500 hover:to-orange-600 hover:transform hover:-translate-y-1 transition-colors duration-300 shadow-xl hover:shadow-2xl"
+        >
+          <motion.div
+            className="flex-shrink-0 bg-gradient-to-r from-orange-500 to-orange-600 w-12 h-12 rounded-lg flex items-center justify-center text-white mb-4"
+            whileHover={{ rotate: 10 }}
+            transition={{ type: "spring", stiffness: 200 }}
           >
-            {/* Map over featuresData */}
-            {featuresData.map((feature, index) => (
-              <motion.div 
-                key={index} 
-                variants={fadeInSlideUp}
-                className="group bg-white p-6 rounded-2xl flex items-start gap-4 hover:bg-gradient-to-r hover:from-orange-500 hover:to-orange-600 hover:transform hover:-translate-y-1 transition-colors duration-300 shadow-xl hover:shadow-2xl"
-              >
-                <div className="flex-shrink-0 bg-gradient-to-r from-orange-500 to-orange-600 w-12 h-12 rounded-lg flex items-center justify-center text-white">
-                  {feature.icon}
-                </div>
-                <div>
-                  <h3 className="text-md font-semibold mb-1 text-gray-900 group-hover:text-white">{feature.title}</h3> 
-                  <p className="text-gray-600 text-sm group-hover:text-white">{feature.description}</p> 
-                </div>
-              </motion.div>
-            ))}
+            {feature.icon}
           </motion.div>
-        </div>
-      </section>
+          <motion.h3
+            className="text-md font-semibold mb-2 text-gray-900 group-hover:text-white"
+          >
+            {feature.title}
+          </motion.h3>
+          <motion.p
+            className="text-gray-600 text-sm group-hover:text-white"
+          >
+            {feature.description}
+          </motion.p>
+        </motion.div>
+      ))}
+    </motion.div>
+  </div>
+</section>
+
+
 
       {/* Services Section - Updated Pricing */}
       <section className="py-20 bg-white">
