@@ -1,674 +1,595 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { supabase, getCurrentUser } from '../../utils/supabase';
-import { FaSpinner } from 'react-icons/fa';
-import { useTranslation } from 'react-i18next';
-import { ServiceType } from './orders/types';
-import toast from 'react-hot-toast';
-import OrderDetailsDialog from './orders/components/OrderDetailsDialog';
-import Message from './Message';
-import OrderListPanel from './orderTracker/OrderListPanel';
-import OrderMapPanel from './orderTracker/OrderMapPanel';
-import OrderDetailsPanel from './orderTracker/OrderDetailsPanel';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+import React, { useState, useEffect } from "react";
+import { supabase, getCurrentUser } from "../../utils/supabase";
+import { AnimatePresence } from "framer-motion";
+import { useNavigate, Link } from "react-router-dom";
+import toast from "react-hot-toast";
+import { initiateOrderChat } from "../../utils/chatUtils";
+import { FaSpinner, FaMapMarkerAlt, FaLocationArrow, FaCommentAlt } from "react-icons/fa";
+import { SERVICES } from "./orders/constants";
+import { getToastConfig, validateFrenchAddress, getStatusConfig } from "./orders/utils";
+import { formatCurrency, formatDate } from "../../utils/i18n";
+import ServiceSelectionDialog from "./orders/components/ServiceSelectionDialog";
+import OrderDetailsDialog from "./orders/components/OrderDetailsDialog";
+import { Order as OrderType, Service, OrderFormData, OrderStatus } from "./orders/types";
+import { useTranslation } from "react-i18next";
+import { Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Button } from "@mui/material";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CircularProgress from "@mui/material/CircularProgress";
+import CustomerOrderDetails from "../CustomerDash/OrderDetails";
+import CustomerChatModal from "../CustomerDash/CustomerChatModal";
+import { ValidOrderStatus } from "../../types/order";
 
-// Custom CSS to fix z-index issues with the map
-const mapContainerStyle = {
-  height: '100%',
-  width: '100%',
-  position: 'relative',
-  zIndex: 1
-} as React.CSSProperties;
-
-const mapWrapperStyle = {
-  position: 'relative',
-  zIndex: 1
-} as React.CSSProperties;
-
-// Fix Leaflet icon issues
-// @ts-ignore
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-});
-
-// Custom marker icons
-const driverIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
-
-const pickupIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
-
-const destinationIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
-
-// Add this debounce utility at the component level
-const debounce = (fn: Function, ms = 300) => {
-  let timeoutId: ReturnType<typeof setTimeout>;
-  return function(this: any, ...args: any[]) {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => fn.apply(this, args), ms);
-  };
-};
-
-const OrderTracker: React.FC = () => {
+const Order: React.FC = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [userId, setUserId] = useState<string | null>(null);
-  const [orders, setOrders] = useState<any[]>([]);
-  const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
-  const [showOrderDetailsDialog, setShowOrderDetailsDialog] = useState(false);
-  const [selectedOrderService, setSelectedOrderService] = useState<any | null>(null);
-  const [driverLocation, setDriverLocation] = useState<[number, number] | null>(null);
-  const [pickupLocation, setPickupLocation] = useState<[number, number] | null>(null);
-  const [destinationLocation, setDestinationLocation] = useState<[number, number] | null>(null);
+  const [orders, setOrders] = useState<OrderType[]>([]);
+  const [showServiceDialog, setShowServiceDialog] = useState(false);
+  const [selectedService, setSelectedService] = useState<Service | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<OrderType | null>(null);
+  const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingOrders, setIsLoadingOrders] = useState(false);
-  const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [driverDetails, setDriverDetails] = useState<any | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const [isCancelling, setIsCancelling] = useState(false);
+  
+  // State for chat modal
+  const [isChatModalOpen, setIsChatModalOpen] = useState(false);
+  const [selectedChatOrder, setSelectedChatOrder] = useState<OrderType | null>(null);
+  const [driverName, setDriverName] = useState("");
+  const [driverAuthId, setDriverAuthId] = useState<string>("");
+  
+  // State for delivery confirmation dialog
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmingOrderId, setConfirmingOrderId] = useState<string | null>(null);
+  const [isConfirmingDelivery, setIsConfirmingDelivery] = useState(false);
+  
+  // State for CustomerOrderDetails modal
+  const [showOrderDetailsModal, setShowOrderDetailsModal] = useState(false);
+  const [selectedOrderForDetails, setSelectedOrderForDetails] = useState<OrderType | null>(null);
 
-  // Messaging feature states
-  const [showMessageDialog, setShowMessageDialog] = useState<boolean>(false);
-  const [messageReceiverId, setMessageReceiverId] = useState<string>('');
-  const [isDriverViewActive, setIsDriverViewActive] = useState<boolean>(false);
-
-  // At the top of the component add this state
-  const [unreadMessageCounts, setUnreadMessageCounts] = useState<{[key: string]: number}>({});
-
-  // Add this to control fetch timing and prevent race conditions
-  const fetchController = useRef<AbortController | null>(null);
-
-  // Create debounced versions of frequently called functions
-  const debouncedFetchDriverLocation = useRef(
-    debounce((driverId: string) => fetchDriverLocation(driverId), 500)
-  ).current;
-
-  // Fetch current user
   useEffect(() => {
     async function fetchCurrentUser() {
       try {
-        const userSessionStr = localStorage.getItem('userSession');
-        if (userSessionStr) {
-          try {
-            const userSession = JSON.parse(userSessionStr);
-            if (userSession && userSession.id) {
-              setUserId(userSession.id);
-              return;
-            }
-          } catch (e) {
-            console.error("Error parsing localStorage session:", e);
-          }
+        setIsLoading(true);
+        
+        // Check localStorage first
+        const storedUser = localStorage.getItem("userId");
+        if (storedUser) {
+          setUserId(storedUser);
+          fetchOrders(storedUser);
+          return;
         }
-
+        
         const user = await getCurrentUser();
         if (user) {
           setUserId(user.id);
+          fetchOrders(user.id);
         } else {
-          setError(t('common.authError'));
+          navigate("/login");
         }
       } catch (error) {
-        console.error("Error getting user session:", error);
-        setError(t('common.authError'));
+        console.error("Error fetching current user:", error);
+        setError("Failed to authenticate user. Please try again.");
+      } finally {
+        setIsLoading(false);
       }
     }
     
     fetchCurrentUser();
-  }, [t]);
+  }, [navigate]);
 
-  // Fetch active orders when userId changes
+  // Subscribe to order updates
   useEffect(() => {
-    if (userId) {
-      fetchActiveOrders();
-    }
+    const subscription = supabase
+      .channel('orders_channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        if (userId) {
+          fetchOrders(userId);
+        }
+      })
+      .subscribe();
+
+    return () => {
+      console.log("Removing subscription");
+      supabase.removeChannel(subscription);
+    };
   }, [userId]);
 
-  // Setup real-time updates for driver location
-  useEffect(() => {
-    if (selectedOrder?.id) {
-      // Start polling for driver location updates
-      startLocationUpdates();
-      
-      // Clean up the interval when unmounting or selecting a different order
-      return () => {
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-        }
-      };
-    }
-  }, [selectedOrder]);
-
-  // Call this in useEffect after orders are loaded
-  useEffect(() => {
-    if (orders.length > 0) {
-      fetchUnreadMessageCounts();
-      
-      // Set up subscription for new messages
-      const messageSubscription = supabase
-        .channel('public:messages')
-        .on('postgres_changes', { 
-          event: 'INSERT', 
-          schema: 'public', 
-          table: 'messages' 
-        }, () => {
-          // Refresh unread counts when new messages arrive
-          fetchUnreadMessageCounts();
-        })
-        .subscribe();
-        
-      return () => {
-        messageSubscription.unsubscribe();
-      };
-    }
-  }, [orders]);
-
-  // Fetch active orders (status = accepted or active, excluding carpooling)
-  const fetchActiveOrders = async () => {
-    if (!userId) return;
-    
-    // Use the specific loading state for subsequent fetches
-    setIsLoadingOrders(true);
-    setError(null);
-    
+  const fetchOrders = async (userId: string) => {
     try {
-      // Fetch orders that are accepted or active
+      setIsLoading(true);
+      
       const { data, error } = await supabase
         .from('orders')
-        .select('*, services(*)')
-        .eq('user_id', userId)
-        .in('status', ['accepted', 'active', 'pending'])
+        .select('*')
+        .or(`user_id.eq.${userId},driver_id.eq.${userId}`)
         .order('created_at', { ascending: false });
       
-      if (error) throw error;
-      
-      if (data) {
-        // Filter out carpooling orders
-        const deliveryOrders = data.filter(order => 
-          order.services?.name !== 'Carpooling'
-        );
-        
-        setOrders(deliveryOrders);
-        
-        // If we have orders and none selected yet, select the first one
-        // Or if the previously selected order is no longer in the active list
-        const currentSelectedStillActive = selectedOrder && deliveryOrders.some(o => o.id === selectedOrder.id);
-        if (deliveryOrders.length > 0 && !currentSelectedStillActive) {
-          const firstOrder = deliveryOrders[0];
-          setSelectedOrder(firstOrder);
-          // Use Promise.all to fetch locations and driver details in parallel if possible
-          await Promise.all([
-            fetchOrderLocations(firstOrder),
-            firstOrder.driver_id ? fetchDriverDetails(firstOrder.driver_id) : Promise.resolve()
-          ]);
-        } else if (deliveryOrders.length === 0) {
-            setSelectedOrder(null); // Clear selection if no active orders
-            setDriverDetails(null);
-            setDriverLocation(null);
-        }
+      if (error) {
+        throw error;
       }
+      
+      setOrders(data || []);
     } catch (error) {
-      console.error('Error fetching active orders:', error);
-      setError(t('common.error'));
-      setOrders([]); // Clear orders on error
-      setSelectedOrder(null);
+      console.error("Error fetching orders:", error);
+      setError("Failed to load orders. Please refresh the page.");
     } finally {
-      // Ensure both loading states are set to false
-      setIsLoading(false); // For initial load
-      setIsLoadingOrders(false); // For subsequent loads
+      setIsLoading(false);
     }
   };
 
-  // Simulate fetching driver's current location
-  const fetchDriverLocation = async (driverId: string) => {
-    if (!driverId) return;
-    
-    try {
-      setIsLoadingLocation(true);
-      
-      // In a real app, you would fetch the actual driver location from your backend
-      // For this prototype, we're generating random movements around the pickup location
-      if (pickupLocation) {
-        // Generate a position with small random movement from the pickup location
-        const randomLat = (Math.random() * 0.01) - 0.005;
-        const randomLng = (Math.random() * 0.01) - 0.005;
-        
-        setDriverLocation([
-          pickupLocation[0] + randomLat,
-          pickupLocation[1] + randomLng
-        ]);
-      }
-    } catch (error) {
-      console.error('Error fetching driver location:', error);
-    } finally {
-      setIsLoadingLocation(false);
-    }
+  const findServiceForOrder = (order: OrderType): Service | undefined => {
+    return SERVICES.find(service => service.id === order.service_id);
   };
 
-  // Fetch driver details
-  const fetchDriverDetails = async (driverId: string) => {
-    if (!driverId) return;
-    
+  const handleCreateOrder = () => {
+    setShowServiceDialog(true);
+  };
+
+  const handleViewOrder = (order: OrderType) => {
+    console.log('Viewing order details:', order);
+    // Use CustomerOrderDetails for viewing order details
+    setSelectedOrderForDetails(order);
+    setShowOrderDetailsModal(true);
+  };
+
+  const handleCancelOrder = async (orderId: string) => {
     try {
       const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, phone, profile_image')
-        .eq('id', driverId)
+        .from('orders')
+        .update({ status: OrderStatus.CANCELLED })
+        .eq('id', orderId);
+      
+      if (error) {
+        throw error;
+      }
+      
+      toast.success("Order cancelled successfully", getToastConfig("success"));
+      
+      if (userId) {
+        fetchOrders(userId);
+      }
+    } catch (error) {
+      console.error("Error cancelling order:", error);
+      toast.error("Failed to cancel order. Please try again.", getToastConfig("error"));
+    }
+  };
+
+  // Function to open the confirmation dialog
+  const openConfirmDialog = (orderId: string) => {
+    setConfirmingOrderId(orderId);
+    setShowConfirmDialog(true);
+  };
+
+  // Function to handle confirming delivery of an order
+  const handleConfirmDelivery = async () => {
+    if (!confirmingOrderId) return;
+    
+    try {
+      setIsConfirmingDelivery(true);
+      
+      // First, get the order details to find the driver_id and price
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select('driver_id, price')
+        .eq('id', confirmingOrderId)
         .single();
       
-      if (error) throw error;
-      
-      if (data) {
-        setDriverDetails(data);
+      if (orderError) {
+        throw orderError;
       }
-    } catch (error) {
-      console.error('Error fetching driver details:', error);
-    }
-  };
-
-  // Fetch and geocode order locations
-  const fetchOrderLocations = async (order: any) => {
-    try {
-      // For a real app, you would geocode these addresses to get coordinates
-      // For this prototype, we'll use hardcoded coordinates for Paris, France
-      // In production, use a geocoding service like Google Maps Geocoding API
       
-      // Simulate pickup location in central Paris
-      setPickupLocation([48.8566, 2.3522]);
-      
-      // Simulate destination ~2km away
-      setDestinationLocation([48.8710, 2.3699]);
-    } catch (error) {
-      console.error('Error fetching order locations:', error);
-      toast.error(t('common.error'));
-    }
-  };
-
-  // Modify startLocationUpdates to use debounced function
-  const startLocationUpdates = () => {
-    // Clear any existing interval
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-    
-    // Immediately fetch the initial location
-    if (selectedOrder?.driver_id) {
-      fetchDriverLocation(selectedOrder.driver_id);
-    }
-    
-    // Set up an interval to fetch location updates every 5 seconds
-    timerRef.current = setInterval(() => {
-      if (selectedOrder?.driver_id) {
-        debouncedFetchDriverLocation(selectedOrder.driver_id);
-      }
-    }, 5000);
-  };
-
-  // Handle order selection
-  const handleSelectOrder = (order: any) => {
-    // Cancel any in-progress fetches
-    if (fetchController.current) {
-      fetchController.current.abort();
-    }
-    
-    // Create a new abort controller for this fetch session
-    fetchController.current = new AbortController();
-    
-    // Close any open message dialog
-    setShowMessageDialog(false);
-    setMessageReceiverId('');
-    
-    // Set the selected order
-    setSelectedOrder(order);
-    
-    // Start async fetches with the abort signal
-    const signal = fetchController.current.signal;
-    
-    // Create a fetch wrapper that respects the abort signal
-    const fetchWithSignal = async () => {
-      try {
-        await Promise.all([
-          fetchOrderLocations(order),
-          order.driver_id ? fetchDriverDetails(order.driver_id) : Promise.resolve()
-        ]);
-      } catch (error) {
-        // Check if this is an abort error (user switched selection quickly)
-        if ((error as any)?.name === 'AbortError') {
-          console.log('Fetch was aborted as user changed selection');
-        } else {
-          console.error('Error fetching order data:', error);
-          toast.error(t('common.fetchError'));
-        }
-      }
-    };
-    
-    fetchWithSignal();
-  };
-
-  // Handle open order details
-  const handleOpenOrderDetails = () => {
-    if (selectedOrder && selectedOrder.services) {
-      const serviceData = {
-        id: selectedOrder.services.id,
-        name: selectedOrder.services.name,
-        type: selectedOrder.services.type || ServiceType.PARCELS,
-        description: selectedOrder.services.description || '',
-        minPrice: selectedOrder.services.min_price || 5,
-        image: selectedOrder.services.image || '',
-        theme: {
-          bg: 'bg-purple-500/10',
-          text: 'text-purple-500',
-          border: 'border-purple-500/20'
-        }
-      };
-      
-      setSelectedOrderService(serviceData);
-      setShowOrderDetailsDialog(true);
-    }
-  };
-
-  // Handle order cancellation
-  const handleCancelOrder = async (orderId: string) => {
-    if (!window.confirm(t('orders.confirmCancel'))) {
-      return;
-    }
-    
-    setIsCancelling(true);
-    try {
+      // Update the order status to 'completed'
       const { error } = await supabase
         .from('orders')
-        .update({ status: 'cancelled' })
-        .eq('id', orderId);
-        
-      if (error) throw error;
+        .update({ 
+          status: 'completed',
+          delivery_confirmed: true,
+          confirmed_at: new Date().toISOString(),
+          confirmed_by: userId || ''
+        })
+        .eq('id', confirmingOrderId);
       
-      toast.success(t('orders.cancelSuccess'));
-      fetchActiveOrders();
-      setShowOrderDetailsDialog(false);
-      // If the cancelled order was the selected one, clear selection
-      if (selectedOrder?.id === orderId) {
-        setSelectedOrder(null);
-      }
-    } catch (error) {
-      console.error('Error cancelling order:', error);
-      toast.error(t('common.error'));
-    } finally {
-      setIsCancelling(false);
-    }
-  };
-
-  // Handle open message dialog
-  const handleOpenMessageDialog = () => {
-    if (!selectedOrder) {
-      console.error("No order selected");
-      return;
-    }
-    
-    if (!selectedOrder.driver_id) {
-      toast.error(t('messages.noRecipient'));
-      return;
-    }
-    
-    // Ensure we have a valid driver ID string
-    if (typeof selectedOrder.driver_id !== 'string' || selectedOrder.driver_id.trim() === '') {
-      console.error("Invalid driver ID:", selectedOrder.driver_id);
-      toast.error(t('common.error'));
-      return;
-    }
-    
-    // Set receiver ID and show dialog
-    setMessageReceiverId(selectedOrder.driver_id);
-    setShowMessageDialog(true);
-    
-    console.log("Opening message dialog with:", {
-      orderId: selectedOrder.id,
-      receiverId: selectedOrder.driver_id
-    });
-  };
-
-  // Add this function to fetch unread message counts
-  const fetchUnreadMessageCounts = async () => {
-    if (!orders.length) return;
-    
-    try {
-      const { data: userSession } = await supabase.auth.getSession();
-      if (!userSession?.session?.user) return;
-      
-      const userId = userSession.session.user.id;
-      
-      // Fetch unread message counts for each order
-      const orderIds = orders.map(order => order.id);
-      
-      // Use Promise.race to implement a timeout for the RPC call
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('RPC timeout')), 3000)
-      );
-      
-      try {
-        // Run a raw query to get the counts since group by is not directly supported in the JS client
-        const rpcPromise = supabase.rpc('get_unread_message_counts', { 
-          user_id: userId,
-          order_ids: orderIds 
-        });
-        
-        const { data, error } = await Promise.race([rpcPromise, timeoutPromise]) as any;
-        
-        if (error) throw error;
-        
-        if (data) {
-          const counts: {[key: string]: number} = {};
-          data.forEach((item: any) => {
-            counts[item.order_id] = item.count;
-          });
-          setUnreadMessageCounts(counts);
-          return;
-        }
-      } catch (rpcError) {
-        console.warn('RPC call failed or timed out, falling back to manual count:', rpcError);
-        // Continue to fallback
+      if (error) {
+        throw error;
       }
       
-      // Fallback: fetch all unread messages and count manually
-      const { data: messages, error: messagesError } = await supabase
-        .from('messages')
-        .select('order_id')
-        .eq('receiver_id', userId)
-        .eq('read', false)
-        .in('order_id', orderIds);
-        
-      if (messagesError) throw messagesError;
-      
-      if (messages) {
-        const counts: {[key: string]: number} = {};
-        messages.forEach((message: any) => {
-          if (!counts[message.order_id]) {
-            counts[message.order_id] = 0;
-          }
-          counts[message.order_id]++;
-        });
-        setUnreadMessageCounts(counts);
-      }
-    } catch (error) {
-      console.error('Error fetching unread message counts:', error);
-    }
-  };
-
-  // Add cleanup logic for message dialog when selectedOrder changes
-  useEffect(() => {
-    // Reset message dialog state when selected order changes
-    setShowMessageDialog(false);
-    setMessageReceiverId('');
-  }, [selectedOrder]);
-
-  // Add cleanup for fetch controller on unmount
-  useEffect(() => {
-    return () => {
-      if (fetchController.current) {
-        fetchController.current.abort();
-      }
-      
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-  }, []);
-
-  // Main render function
-  // Loading state for the entire component
-  if (isLoading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <FaSpinner className="text-indigo-600 dark:text-indigo-400 animate-spin text-2xl" />
-      </div>
-    );
-  }
-  
-  // Main layout
-  return (
-    <div className="container mx-auto pb-8 px-4 sm:px-6">
-      {/* Title and Subtitle */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mb-6"
-      >
-        <div className="flex justify-between items-center mb-3">
-          <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 dark:text-white">
-            {t('tracking.title')}
-          </h1>
-        </div>
-        <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400">
-          {t('tracking.subtitle')}
-        </p>
-      </motion.div>
-
-      {/* Mobile Tabs - Only visible on small screens */}
-      <div className="md:hidden mb-4">
-        <div className="bg-white dark:bg-midnight-800 rounded-xl shadow-sm border border-gray-100 dark:border-stone-700/20 p-1 flex">
-          <button 
-            onClick={() => setIsDriverViewActive(false)}
-            className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium ${!isDriverViewActive 
-              ? 'bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300' 
-              : 'text-gray-700 dark:text-gray-300'}`}
-          >
-            Orders
-          </button>
-          <button 
-            onClick={() => setIsDriverViewActive(true)}
-            className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium ${isDriverViewActive 
-              ? 'bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300' 
-              : 'text-gray-700 dark:text-gray-300'}`}
-            disabled={!selectedOrder}
-          >
-            Track
-          </button>
-        </div>
-      </div>
-
-      {/* Main Grid Layout - Modified for mobile responsiveness */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      // Credit the driver's wallet if driver_id exists
+      if (orderData?.driver_id && orderData?.price) {
+        // Get the driver's wallet
+        const { data: walletData, error: walletError } = await supabase
+          .from('wallets')
+          .select('id, balance')
+          .eq('user_id', orderData.driver_id)
+          .maybeSingle();
           
-        {/* Order List Panel - Hidden on mobile when map view is active */}
-        <div className={`${isDriverViewActive ? 'hidden md:block' : ''}`}>
-          <OrderListPanel 
-            orders={orders}
-            isLoading={isLoading}
-            isLoadingOrders={isLoadingOrders}
-            error={error}
-            selectedOrder={selectedOrder}
-            driverDetails={driverDetails}
-            handleSelectOrder={(order) => {
-              handleSelectOrder(order);
-              // On mobile, switch to map view when an order is selected
-              if (window.innerWidth < 768) {
-                setIsDriverViewActive(true);
+        if (walletError && walletError.code !== 'PGRST116') {
+          console.error('Error fetching driver wallet:', walletError);
+        } else if (walletData) {
+          // Update the wallet balance
+          const newBalance = parseFloat(walletData.balance || '0') + parseFloat(orderData.price);
+          
+          const { error: updateError } = await supabase
+            .from('wallets')
+            .update({ 
+              balance: newBalance.toString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', walletData.id);
+            
+          if (updateError) {
+            console.error('Error updating driver wallet:', updateError);
+          } else {
+            // Create a transaction record
+            await supabase.from('wallet_transactions').insert({
+              wallet_id: walletData.id,
+              amount: orderData.price,
+              type: 'earnings',
+              status: 'completed',
+              description: `Earnings from order #${confirmingOrderId}`,
+              payment_method: 'order_completion',
+              metadata: { order_id: confirmingOrderId }
+            });
+          }
+        }
+      }
+      
+      // Close the dialog
+      setShowConfirmDialog(false);
+      
+      // Show success message
+      toast.success("Delivery confirmed successfully", getToastConfig("success"));
+      
+      // Update the local orders list
+      if (userId) {
+        fetchOrders(userId);
+      }
+    } catch (error) {
+      console.error('Error confirming delivery:', error);
+      toast.error("Could not confirm delivery. Please try again.", getToastConfig("error"));
+      // Keep the dialog open on error
+    } finally {
+      setIsConfirmingDelivery(false);
+    }
+  };
+
+  return (
+    <div className="px-4 py-6 sm:px-6 lg:px-8">
+      <div className="sm:flex sm:items-center sm:justify-between mb-6">
+        <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 dark:text-white">
+          {t('Orders')}
+        </h1>
+        <button
+          onClick={handleCreateOrder}
+          className="mt-3 sm:mt-0 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-sunset hover:bg-sunset-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sunset"
+        >
+          {t('Create Order')}
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/30 rounded-md p-4 mb-6">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              {/* Error icon */}
+            </div>
+            <div className="ml-3">
+              <h3 className="text-sm font-medium text-red-800 dark:text-red-300">{error}</h3>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex justify-center items-center h-64">
+          <FaSpinner className="animate-spin text-sunset h-8 w-8" />
+        </div>
+      ) : orders.length === 0 ? (
+        <div className="bg-white dark:bg-midnight-800 shadow overflow-hidden sm:rounded-lg p-6 text-center">
+          <p className="text-gray-500 dark:text-gray-400">{t('No orders found')}</p>
+          <button
+            onClick={handleCreateOrder}
+            className="mt-4 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-sunset hover:bg-sunset-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sunset"
+          >
+            {t('Create your first order')}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col">
+            <div className="-my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
+              <div className="py-2 align-middle inline-block min-w-full sm:px-6 lg:px-8">
+                <div className="shadow overflow-hidden border-b border-gray-200 dark:border-stone-600/10 sm:rounded-lg">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-stone-600/10">
+                    <thead className="bg-gray-50 dark:bg-midnight-700">
+                      <tr>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t('Order')}
+                        </th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t('Locations')}
+                        </th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t('Price')}
+                        </th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                          {t('Status')}
+                        </th>
+                        <th scope="col" className="relative px-6 py-3">
+                          <span className="sr-only">{t('Actions')}</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white dark:bg-midnight-800 divide-y divide-gray-200 dark:divide-stone-600/10">
+                      {orders.map((order) => {
+                        const statusConfig = getStatusConfig(order.status);
+                        return (
+                          <tr 
+                            key={order.id}
+                            className="hover:bg-gray-50 dark:hover:bg-midnight-700/50 cursor-pointer transition-colors duration-200"
+                            onClick={() => handleViewOrder(order)}
+                          >
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="flex items-center">
+                                <div className="flex-shrink-0 h-10 w-10 rounded-full bg-gray-200 dark:bg-midnight-600 flex items-center justify-center">
+                                  {findServiceForOrder(order)?.icon || '🚚'}
+                                </div>
+                                <div className="ml-4">
+                                  <div className="text-sm font-medium text-gray-900 dark:text-white">
+                                    {order.id.substring(0, 8)}...
+                                  </div>
+                                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                                    {formatDate(order.created_at)}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex flex-col text-sm text-gray-900 dark:text-white">
+                                <div className="flex items-center">
+                                  <FaMapMarkerAlt className="mr-1 text-sunset" />
+                                  <span className="truncate max-w-[180px]">{order.pickup_location}</span>
+                                </div>
+                                <div className="w-px h-2 ml-2 border-l border-dashed border-gray-300 dark:border-stone-600"></div>
+                                <div className="flex items-center">
+                                  <FaLocationArrow className="mr-1 text-purple-600" />
+                                  <span className="truncate max-w-[180px]">{order.dropoff_location}</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900 dark:text-white">{formatCurrency(order.estimated_price || 0)}</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusConfig.bgClass} ${statusConfig.textClass}`}>
+                                {t(`orders.status.${order.status}`)}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                              <div className="flex justify-end space-x-3">
+                                {/* Message Button - Show for orders with a driver assigned */}
+                                {order.driver_id && (
+                                  <button
+                                    className="inline-flex items-center px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-md hover:bg-green-200 dark:hover:bg-green-800/40 transition-colors duration-200"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      // Open chat with driver
+                                      setSelectedChatOrder(order);
+                                      setIsChatModalOpen(true);
+                                    }}
+                                  >
+                                    <FaCommentAlt className="mr-1" />
+                                    {t('Message')}
+                                  </button>
+                                )}
+                                
+                                {/* Track Order Button - Only show for trackable orders */}
+                                {(order.status === OrderStatus.ACCEPTED || order.status === OrderStatus.IN_TRANSIT || order.status === OrderStatus.PENDING) && (
+                                  <Link 
+                                    to="/dashboard/track-order"
+                                    className="inline-flex items-center px-3 py-1 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-md hover:bg-indigo-200 dark:hover:bg-indigo-800/40 transition-colors duration-200"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      // Handle tracking logic
+                                    }}
+                                  >
+                                    {t('Track')}
+                                  </Link>
+                                )}
+                                
+                                {/* Confirm Delivery Button - Only show for delivered orders */}
+                                {order.status === 'delivered' && (
+                                  <button 
+                                    className="text-sunset hover:text-purple-600 transition-colors duration-200"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openConfirmDialog(order.id);
+                                    }}
+                                  >
+                                    {t('Confirm Delivery')}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      <AnimatePresence>
+        {showServiceDialog && (
+          <ServiceSelectionDialog
+            onClose={() => setShowServiceDialog(false)}
+            onSelectService={(service: Service) => {
+              setSelectedService(service);
+              setShowServiceDialog(false);
+              setSelectedOrder({} as OrderType);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {selectedService && selectedOrder && (
+          <OrderDetailsDialog
+            onClose={() => {
+              setSelectedService(null);
+              setSelectedOrder(null);
+            }}
+            service={selectedService}
+            order={selectedOrder}
+            viewOnly={!!selectedOrder.id}
+            onSubmit={async (orderData: OrderFormData) => {
+              setIsCreatingOrder(true);
+              
+              try {
+                // Create order logic would go here
+                
+                // Show success message
+                toast.success("Order created successfully", getToastConfig("success"));
+                
+                // Refresh orders
+                if (userId) {
+                  fetchOrders(userId);
+                }
+                
+                // Close dialog
+                setSelectedService(null);
+                setSelectedOrder(null);
+              } catch (error) {
+                console.error("Error creating order:", error);
+                toast.error("Failed to create order. Please try again.", getToastConfig("error"));
+              } finally {
+                setIsCreatingOrder(false);
               }
             }}
           />
-        </div>
+        )}
+      </AnimatePresence>
 
-        {/* Map and Order Details - Hidden on mobile when order list view is active */}
-        <div className={`lg:col-span-2 ${!isDriverViewActive ? 'hidden md:block' : ''}`}>
-          {/* Map Panel */}
-          <OrderMapPanel 
-            selectedOrder={selectedOrder}
-            driverLocation={driverLocation}
-            pickupLocation={pickupLocation}
-            destinationLocation={destinationLocation}
-            driverDetails={driverDetails}
-            isLoadingLocation={isLoadingLocation}
-            mapContainerStyle={{...mapContainerStyle, height: '350px'}}
-            mapWrapperStyle={mapWrapperStyle}
-            driverIcon={driverIcon}
-            pickupIcon={pickupIcon}
-            destinationIcon={destinationIcon}
-          />
-          
-          {/* Order Details Panel - Only render if an order is selected */}
-          {selectedOrder && (
-            <OrderDetailsPanel
-              selectedOrder={selectedOrder}
-              unreadMessageCounts={unreadMessageCounts}
-              handleOpenOrderDetails={handleOpenOrderDetails}
-              handleOpenMessageDialog={handleOpenMessageDialog}
-              handleCancelOrder={handleCancelOrder}
-              isCancelling={isCancelling}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Dialogs remain in the main component as they overlay everything */}
+      {/* Chat Modal */}
       <AnimatePresence>
-        {showOrderDetailsDialog && selectedOrder && selectedOrderService && (
-          <OrderDetailsDialog
-            onClose={() => setShowOrderDetailsDialog(false)}
-            service={selectedOrderService}
-            order={selectedOrder}
-            viewOnly={true}
-            onSubmit={async () => {}}
-            onCancelOrder={handleCancelOrder}
+        {isChatModalOpen && selectedChatOrder && selectedChatOrder.driver_id && (
+          <CustomerChatModal
+            open={isChatModalOpen}
+            onClose={() => setIsChatModalOpen(false)}
+            orderId={selectedChatOrder.id}
+            driverId={selectedChatOrder.driver_id}
           />
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {showMessageDialog && selectedOrder && messageReceiverId && messageReceiverId.length > 0 && (
-          <Message
-            key={`${selectedOrder.id}-${messageReceiverId}`}
-            orderId={selectedOrder.id}
-            receiverId={messageReceiverId}
-            isDriver={false}
-            onClose={() => {
-              setShowMessageDialog(false);
-              setMessageReceiverId('');
-            }}
-          />
-        )}
-      </AnimatePresence>
+      {/* Order Details Modal */}
+      {showOrderDetailsModal && selectedOrderForDetails && (
+        <CustomerOrderDetails
+          order={{
+            id: selectedOrderForDetails.id,
+            status: selectedOrderForDetails.status as ValidOrderStatus,
+            pickup_location: selectedOrderForDetails.pickup_location,
+            dropoff_location: selectedOrderForDetails.dropoff_location,
+            delivery_confirmed: selectedOrderForDetails.delivery_confirmed,
+            driver_name: selectedOrderForDetails.driver_name || '',
+            driver_phone: selectedOrderForDetails.driver_phone || '',
+            driver_id: selectedOrderForDetails.driver_id,
+            created_at: selectedOrderForDetails.created_at,
+            user_id: selectedOrderForDetails.user_id
+          }}
+          open={showOrderDetailsModal}
+          onClose={() => {
+            setShowOrderDetailsModal(false);
+            setSelectedOrderForDetails(null);
+          }}
+          onConfirmDelivery={async (orderId: string) => {
+            // Use the existing handleConfirmDelivery logic but with the orderId parameter
+            setConfirmingOrderId(orderId);
+            
+            try {
+              setIsConfirmingDelivery(true);
+              
+              // Update the order status to 'completed'
+              const { error } = await supabase
+                .from('orders')
+                .update({ 
+                  status: 'completed',
+                  delivery_confirmed: true,
+                  confirmed_at: new Date().toISOString(),
+                  confirmed_by: userId || ''
+                })
+                .eq('id', orderId);
+              
+              if (error) {
+                throw error;
+              }
+              
+              // Import the wallet utility function
+              const { creditDriverWalletForCompletedOrder } = await import('../../utils/walletUtils');
+              
+              // Credit the driver's wallet
+              const { success, error: walletError } = await creditDriverWalletForCompletedOrder(orderId);
+              
+              if (!success && walletError) {
+                console.error('Error crediting driver wallet:', walletError);
+              }
+              
+              // Update the local orders list
+              if (userId) {
+                fetchOrders(userId);
+              }
+              
+              return Promise.resolve();
+            } catch (error) {
+              console.error('Error confirming delivery:', error);
+              toast.error("Could not confirm delivery. Please try again.", getToastConfig("error"));
+              return Promise.reject(error);
+            } finally {
+              setIsConfirmingDelivery(false);
+              setConfirmingOrderId(null);
+            }
+          }}
+        />
+      )}
+      
+      {/* Confirmation Dialog */}
+      <Dialog
+        open={showConfirmDialog}
+        onClose={() => !isConfirmingDelivery && setShowConfirmDialog(false)}
+        aria-labelledby="confirm-delivery-dialog-title"
+        aria-describedby="confirm-delivery-dialog-description"
+      >
+        <DialogTitle id="confirm-delivery-dialog-title">
+          {t('Confirm Delivery')}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText id="confirm-delivery-dialog-description">
+            {t('Are you sure you want to confirm this delivery? This action cannot be undone.')}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={() => setShowConfirmDialog(false)} 
+            color="inherit"
+            disabled={isConfirmingDelivery}
+          >
+            {t('Cancel')}
+          </Button>
+          <Button
+            onClick={handleConfirmDelivery}
+            color="primary"
+            disabled={isConfirmingDelivery}
+            startIcon={isConfirmingDelivery ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+          >
+            {isConfirmingDelivery ? t('Confirming...') : t('Confirm')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 };
 
-export default OrderTracker;
+export default Order;
