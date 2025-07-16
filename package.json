@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "node init && vite",
+    "build": "node init && tsc && vite build",
     "verify": "run-p verify:*",
     "verify:eslint": "eslint --max-warnings 0 --ext .tsx,.ts,.js,.jsx ./src",
     "verify:prettier": "prettier -c --ignore-path .gitignore .",
